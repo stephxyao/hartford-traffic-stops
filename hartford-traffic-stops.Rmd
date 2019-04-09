@@ -1,0 +1,194 @@
+---
+title: "Hartford Traffic Stops"
+author: "Stephanie Yao"
+date: "April 2, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# this code chunk loads the necessary libraries
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(fs)
+library(ggthemes)
+library(tidyverse)
+library(lubridate)
+library(stringr)
+library(gganimate)
+library(gt)
+```
+
+```{r import_data, include = FALSE}
+
+# reads in rds data for Hartford, CT and stores it into hartford variable
+hartford <- read_rds(url("https://stacks.stanford.edu/file/druid:tr137st9964/tr137st9964_ct_hartford_2019_02_25.rds"))
+
+# downloads the shapes file for Hartford and stores it into destination file "shapes.tgz"
+download.file(url = "https://stacks.stanford.edu/file/druid:tr137st9964/tr137st9964_ct_hartford_shapefiles_2019_02_25.tgz", destfile = "shapes.tgz", 
+              quiet = TRUE)
+# untars the shapes file so we can use it
+untar("shapes.tgz")
+# reads in the shapes data from the Hartford shapes file
+shapes_data <- read_sf("ct_hartford_shapefiles/Hartford_Neighborhoods.shp")
+# deletes the no longer needed shapes.tgz and shapes file
+file_delete(c("shapes.tgz", "ct_hartford_shapefiles/"))
+
+# reads in rds data for Santa Ana, CA and stores it into santa_ana variable
+santa_ana <- read_rds(url("https://stacks.stanford.edu/file/druid:tr137st9964/tr137st9964_ca_santa_ana_2019_02_25.rds"))
+# downloads the shapes file for Santa Ana and stores it into destination file "shapes2.tgz"
+download.file(url = "https://stacks.stanford.edu/file/druid:tr137st9964/tr137st9964_ca_santa_ana_shapefiles_2019_02_25.tgz", destfile = "shapes2.tgz",
+              quiet = TRUE)
+# untars the shapes file so we can use it
+untar("shapes2.tgz")
+# reads in the shapes data from the Santa Ana shapes file
+shapes2_data <- read_sf("ca_santa_ana_shapefiles/districts83.shp")
+# deletes unnecessary files after the data has been read in
+file_delete(c("shapes2.tgz", "ca_santa_ana_shapefiles/"))
+```
+
+```{r arrest_rate, echo = FALSE}
+# first, I select the relevant variables we need to make the table, and then I group
+# by race and sex since that is how we want to split up the data. Then, I use summarize
+# to count the total number of stops (which is just the number of rows) and sum up
+# the total number of arrests made, which is when arrest_made is equal to TRUE.
+# Then, I use mutate to create a column calculating the arrest_rate for each race and
+# gender group, which is just arrests divided by total stops. I unselect the variables
+# I don't want to show up in the table, and spread the data with a key of gender
+# and a value of the arrest rate, in order to re-organize the data into how I want it 
+# to look for the table. I then ungroup, and use mutate and case_when to capitalize
+# the names of the race groups.
+arrest_rate <- hartford %>% 
+  select(subject_race, subject_sex, arrest_made) %>% 
+  group_by(subject_race, subject_sex) %>% 
+  summarize(total_stops = n(), arrests = sum(arrest_made)) %>% 
+  mutate(arrest_rate = arrests/total_stops) %>% 
+  select(-total_stops, -arrests) %>% 
+  spread(key = subject_sex, value = arrest_rate) %>% 
+  ungroup() %>% 
+  mutate(subject_race = case_when(subject_race == "asian/pacific islander" ~ "Asian/Pacific Islander",
+                           subject_race == "black" ~ "Black",
+                           subject_race == "hispanic" ~ "Hispanic",
+                           subject_race == "other/unknown" ~ "Other/Unknown",
+                           subject_race == "white" ~ "White"
+                           ))
+# Finally, I put the tibble into a table using gt. I add the necessary labels
+# and format the values into percentage values. I re-label the columns using cols_label
+# to make sure the column names are capitalized.
+gt(arrest_rate) %>% 
+  tab_header(title = "Arrest Rate by Race and Gender for Hartford, CT",
+             subtitle = "Based on data collected from years 2013 - 2016") %>% 
+  cols_label(
+    subject_race = "Race",
+    male = "Male",
+    female = "Female"
+  ) %>% 
+  fmt_percent(columns = vars(male, female)) %>% 
+  tab_source_note("Source: Stanford Open Policing Project")
+```
+
+```{r traffic_stops, echo = FALSE, warning = FALSE}
+# First, I use mutate to create a minute column which extracts the minute value from
+# the time variable using minute() from lubridate. Then, I group by minute and use
+# summarize and n() to count the total number of traffic stops made per each minute.
+# I plot this data with ggplot, putting minute on the x-axis and number of traffic
+# stops on the y-axis. Finally, I add the necessary labels and call traffic_stops
+# to get the plot to display.
+traffic_stops <- hartford %>% 
+  mutate(minute = minute(time)) %>% 
+  group_by(minute) %>% 
+  summarize(traffic_stops = n()) %>% 
+  ggplot(aes(x = minute, y = traffic_stops)) +
+  geom_line() +
+  labs(title = "Number of Traffic Stops Per Minute Per Hour of the Day in Hartford, CT",
+       subtitle = "Bias towards traffic stops occurring at rounded hourly times",
+       caption = "Source: Stanford Open Policing Project") +
+  xlab("Minute") +
+  ylab("Number of Traffic Stops")
+
+traffic_stops
+```
+
+```{r race_arrests, echo = FALSE}
+# For this static map I decided to create a map displaying the location of all
+# arrests in Hartford, coloring each arrest by the race of the subject. First, I filter
+# for when arrest_made is true. I remove NA values from lng and lat, and filter lng
+# and lat values to get a closer up view of the Hartford region. I found these lng
+# and lat values by creating the plot first and seeing where good cut-off points would
+# be on the plot. I use mutate and case_when to rename the races with correct
+# capitalization.
+all_race_arrests <- hartford %>% 
+  filter(arrest_made) %>% 
+  filter(!is.na(lng), !is.na(lat)) %>% 
+  filter(lat > 41.73) %>% 
+  filter(lng > -72.717) %>% 
+  filter(lng < -72.65) %>% 
+  mutate(subject_race = case_when(subject_race == "asian/pacific islander" ~ "Asian/Pacific Islander",
+                           subject_race == "black" ~ "Black",
+                           subject_race == "hispanic" ~ "Hispanic",
+                           subject_race == "other/unknown" ~ "Other/Unknown",
+                           subject_race == "white" ~ "White"
+                           ))
+
+# I use st_as_sf here to convert all_race_arrests to an sf object so I can ggplot it
+# with geom_sf(). I set lng and lat as the coordinates and use the appropriate crs
+# value. Finally, I create the plot with ggplot and geom_sf() and add the appropriate
+# labels. I position the legend to the right of the plot with theme and legend.position
+# and I rename the legend with colour = "Subject Race" inside of labs().
+arrest_locations <- st_as_sf(all_race_arrests,
+                             coords = c("lng", "lat"),
+                             crs = 4326)
+# for the data argument in ggplot, I use shapes_data which stores the shapes file for
+# Hartford.
+ggplot(data = shapes_data) +
+  geom_sf() +
+  # Here I use arrest_locations for the data, and color each point by the subject's
+  # race. I set an alpha value that allows us to see the overlap.
+  geom_sf(data = arrest_locations, aes(color = subject_race), alpha = 0.3) +
+  theme_map() +
+  theme(legend.position = "right") +
+  labs(title = "Locations of Arrests Made by Race in Hartford, CT",
+       subtitle = "Based on data collected from years 2013 - 2016",
+       caption = "Source: Stanford Open Policing Project",
+       colour = "Subject Race")
+  
+```
+
+```{r dynamic_map, echo = FALSE, message = FALSE}
+# For my dynamic map I decided to plot the location of citations issued to asian
+# or pacific islander females for each year, in Santa Ana, CA. I first apply the
+# filters to get the dataframe how I want it: I filter for rows where citation_issued
+# is true, for the subject_race to be asian/pacific islander and the sex to be female.
+# I get rid of NA values in lng and lat and set the bounds for lng and lat like I did
+# in question 4 to get a more zoomed up region of the map that focuses only on the
+# Santa Ana region. Then I use mutate to create a new year column, with year extracted
+# from the original date column using lubridate's year(). 
+dynamic_map <- santa_ana %>% 
+  filter(citation_issued) %>% 
+  filter(subject_race == "asian/pacific islander") %>% 
+  filter(subject_sex == "female") %>% 
+  filter(!is.na(lng), !is.na(lat)) %>% 
+  filter(lng >= -117.95) %>% 
+  filter(lat <= 33.8) %>% 
+  mutate(year = year(date))
+# I convert the dynamic_map tibble into an sf object and store it in
+# citation_locations.
+citation_locations <- st_as_sf(dynamic_map,
+                             coords = c("lng", "lat"),
+                             crs = 4326)
+# I use shapes2_data, which stores the shapes file for Santa Ana, as the data argument
+# for ggplot. 
+ggplot(data = shapes2_data) +
+  geom_sf() +
+  # for the data here I use citation_locations which is the sf object I created above.
+  geom_sf(data = citation_locations) +
+  # I add the correct labels. {current_frame} allows the year to change in the title.
+  labs(title = "Citations Issued to Asian/Pacific Islander Females in Santa Ana
+       Year: {current_frame}",
+       caption = "Source: Stanford Open Policing Project") +
+
+# Finally, I add the animation here to show a different frame for each distinct year
+# of the data.
+transition_manual(year)
+
+```
